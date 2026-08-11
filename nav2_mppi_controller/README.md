@@ -86,6 +86,12 @@ Three built-in motion models are provided:
  | plugin               | string | Required: `"mppi::AckermannMotionModel"`                                                                    |
  | min_turning_r        | double | Default 0.2. Minimum turning radius in metres                                                               |
 
+#### Omni Motion Model
+ | Parameter            | Type   | Definition                                                                                                  |
+ | -------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+ | plugin               | string | Required: `"mppi::OmniMotionModel"`                                                                         |
+ | elliptic_limits      | bool   | Default true. When enabled, constrains the (vx, vy) velocity samples to the interior of an ellipse defined by `(vx/vx_lim)^2 + (vy/vy_max)^2 <= 1`, where `vx_lim = vx_max` (forward) or `|vx_min|` (reverse). This prevents the optimizer from exploiting the corners of the rectangular velocity space (which would yield a combined speed of `sqrt(vx_max^2 + vy_max^2)`) and avoids the heading-alignment conflict when time-optimizing critics are active. Set to `false` to restore the legacy rectangular velocity space behavior. |
+
 #### Constraint Critic
  | Parameter             | Type   | Definition                                                                                                  |
  | ---------------       | ------ | ----------------------------------------------------------------------------------------------------------- |

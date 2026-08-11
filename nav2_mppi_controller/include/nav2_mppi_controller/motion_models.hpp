@@ -18,6 +18,7 @@
 
 #include <Eigen/Dense>
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <algorithm>
@@ -341,6 +342,19 @@ public:
   OmniMotionModel() = default;
 
   /**
+   * @brief Initialize motion model.
+   * @param param_handler Pointer to the shared parameters handler
+   * @param plugin_name   Namespaced name of this plugin instance
+   */
+  void initialize(
+    ParametersHandler * param_handler,
+    const std::string & plugin_name) override
+  {
+    auto getParam = param_handler->getParamGetter(plugin_name);
+    getParam(elliptic_limits_, "elliptic_limits", true);
+  }
+
+  /**
    * @brief Whether the motion model is holonomic, using Y axis
    * @return Bool If holonomic
    */
@@ -348,6 +362,77 @@ public:
   {
     return true;
   }
+
+  /**
+   * @brief Apply elliptic velocity constraint to the control sequence.
+   *
+   * When @c elliptic_limits_ is enabled, any (vx, vy) sample that lies
+   * outside the velocity ellipse:
+   *
+   *   (vx / vx_lim)^2 + (vy / vy_max)^2 <= 1
+   *
+   * where @c vx_lim is @c vx_max for forward motion and @c |vx_min| for
+   * reverse motion, is projected back onto the ellipse boundary by scaling
+   * both components uniformly.  This prevents the optimizer from exploiting
+   * the rectangular corners of the velocity space (which would produce a
+   * combined speed of sqrt(vx_max^2 + vy_max^2) rather than vx_max) and
+   * resolves the heading-alignment conflict described in issue #6330.
+   *
+   * The per-axis box constraints applied in the optimizer are still active;
+   * this function adds a second, elliptic constraint on top.
+   *
+   * @param control_sequence Control sequence to apply constraints to
+   */
+  void applyConstraints(models::ControlSequence & control_sequence) override
+  {
+    if (!elliptic_limits_) {
+      return;
+    }
+
+    const float vx_max = control_constraints_.vx_max;
+    const float vx_min = control_constraints_.vx_min;  // stored as negative
+    const float vy_max = control_constraints_.vy;
+
+    // Guard against degenerate configurations (zero limits).
+    if (vx_max <= 0.0f || vy_max <= 0.0f) {
+      return;
+    }
+
+    const float vx_rev_lim = std::fabs(vx_min);  // magnitude for reverse
+
+    const std::size_t n = static_cast<std::size_t>(control_sequence.vx.size());
+    for (std::size_t i = 0; i < n; ++i) {
+      float & vx = control_sequence.vx(i);
+      float & vy = control_sequence.vy(i);
+
+      // Choose the forward or reverse semi-axis depending on the sign of vx.
+      const float vx_lim = (vx >= 0.0f) ? vx_max : vx_rev_lim;
+      if (vx_lim <= 0.0f) {
+        // Degenerate half-ellipse (e.g. reverse disabled). Project onto the vy axis.
+        vx = 0.0f;
+        if (std::fabs(vy) > vy_max) {
+          vy = std::copysign(vy_max, vy);
+        }
+        continue;
+      }
+
+      // Compute the normalised distance from the origin on the ellipse:
+      //   d^2 = (vx / vx_lim)^2 + (vy / vy_max)^2
+      const float nx = vx / vx_lim;
+      const float ny = vy / vy_max;
+      const float d2 = nx * nx + ny * ny;
+
+      if (d2 > 1.0f) {
+        // Scale back to the ellipse surface: new_(vx,vy) = (vx,vy) / sqrt(d2)
+        const float inv_d = 1.0f / std::sqrt(d2);
+        vx *= inv_d;
+        vy *= inv_d;
+      }
+    }
+  }
+
+private:
+  bool elliptic_limits_{true};
 };
 
 }  // namespace mppi
